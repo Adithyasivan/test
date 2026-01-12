@@ -4,22 +4,22 @@ on:
   workflow_dispatch:
     inputs:
       base_secret_name:
-        description: "Base secret name (example: apirate)"
+        description: "Base secret name (example: Playlog_dps_lambda)"
         required: true
         type: string
 
-      add_env_prefix:
+      secret_prefix:
         description: "Prefix secret name with environment (staging_, uat_, prod_)"
         type: boolean
         default: true
 
-      same_value:
+      same_secret_value_everywhere:
         description: "Use the same secret value everywhere"
         required: true
         type: boolean
 
       secret_value_global:
-        description: "Global secret value (used if same_value = true)"
+        description: "Global secret value (used if same_secret_value_everywhere = true)"
         required: false
         type: string
 
@@ -45,38 +45,17 @@ on:
         default: false
 
       # NA env values
-      na_staging:
-        description: "NA staging secret value"
-        required: false
-        type: string
-      na_uat:
-        description: "NA uat secret value"
-        required: false
-        type: string
-      na_master:
-        description: "NA master secret value"
-        required: false
-        type: string
+      na_staging: { type: string }
+      na_uat: { type: string }
+      na_master: { type: string }
 
       # JP env values
-      jp_uat:
-        description: "JP uat secret value"
-        required: false
-        type: string
-      jp_prod:
-        description: "JP prod secret value"
-        required: false
-        type: string
+      jp_uat: { type: string }
+      jp_prod: { type: string }
 
       # CN env values
-      cn_uat:
-        description: "CN uat secret value"
-        required: false
-        type: string
-      cn_prod:
-        description: "CN prod secret value"
-        required: false
-        type: string
+      cn_uat: { type: string }
+      cn_prod: { type: string }
 
 jobs:
   na_jp_secrets:
@@ -95,8 +74,13 @@ jobs:
             exit 1
           fi
 
-          if [[ "${{ inputs.same_value }}" == "true" && -z "${{ inputs.secret_value_global }}" ]]; then
-            echo "❌ same_value is true but secret_value_global is empty"
+          if [[ "${{ inputs.same_secret_value_everywhere }}" == "true" && -z "${{ inputs.secret_value_global }}" ]]; then
+            echo "❌ same_secret_value_everywhere is true but secret_value_global is empty"
+            exit 1
+          fi
+
+          if [[ "${{ inputs.enable_na }}" != "true" && "${{ inputs.enable_jp }}" != "true" && "${{ inputs.enable_cn }}" != "true" ]]; then
+            echo "❌ No region selected"
             exit 1
           fi
 
@@ -113,11 +97,10 @@ jobs:
 
           build_name () {
             ENV=$1
-            BASE="${{ inputs.base_secret_name }}"
-            if [[ "${{ inputs.add_env_prefix }}" == "true" ]]; then
-              echo "${ENV}_${BASE}"
+            if [[ "${{ inputs.secret_prefix }}" == "true" ]]; then
+              echo "${ENV}_${{ inputs.base_secret_name }}"
             else
-              echo "${BASE}"
+              echo "${{ inputs.base_secret_name }}"
             fi
           }
 
@@ -147,7 +130,7 @@ jobs:
               --region "$REGION"
           }
 
-          if [[ "${{ inputs.same_value }}" == "true" ]]; then
+          if [[ "${{ inputs.same_secret_value_everywhere }}" == "true" ]]; then
             apply_secret staging "${{ inputs.secret_value_global }}"
             apply_secret uat "${{ inputs.secret_value_global }}"
             apply_secret master "${{ inputs.secret_value_global }}"
@@ -164,11 +147,10 @@ jobs:
 
           build_name () {
             ENV=$1
-            BASE="${{ inputs.base_secret_name }}"
-            if [[ "${{ inputs.add_env_prefix }}" == "true" ]]; then
-              echo "${ENV}_${BASE}"
+            if [[ "${{ inputs.secret_prefix }}" == "true" ]]; then
+              echo "${ENV}_${{ inputs.base_secret_name }}"
             else
-              echo "${BASE}"
+              echo "${{ inputs.base_secret_name }}"
             fi
           }
 
@@ -198,7 +180,7 @@ jobs:
               --region "$REGION"
           }
 
-          if [[ "${{ inputs.same_value }}" == "true" ]]; then
+          if [[ "${{ inputs.same_secret_value_everywhere }}" == "true" ]]; then
             apply_secret uat "${{ inputs.secret_value_global }}"
             apply_secret prod "${{ inputs.secret_value_global }}"
           else
@@ -215,6 +197,13 @@ jobs:
       contents: read
 
     steps:
+      - name: Validate inputs
+        run: |
+          if [[ "${{ inputs.base_secret_name }}" =~ ^(staging_|uat_|prod_|master_) ]]; then
+            echo "❌ Do not include environment prefix in base_secret_name"
+            exit 1
+          fi
+
       - name: Assume AWS China role
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -227,11 +216,10 @@ jobs:
 
           build_name () {
             ENV=$1
-            BASE="${{ inputs.base_secret_name }}"
-            if [[ "${{ inputs.add_env_prefix }}" == "true" ]]; then
-              echo "${ENV}_${BASE}"
+            if [[ "${{ inputs.secret_prefix }}" == "true" ]]; then
+              echo "${ENV}_${{ inputs.base_secret_name }}"
             else
-              echo "${BASE}"
+              echo "${{ inputs.base_secret_name }}"
             fi
           }
 
@@ -261,7 +249,7 @@ jobs:
               --region "$REGION"
           }
 
-          if [[ "${{ inputs.same_value }}" == "true" ]]; then
+          if [[ "${{ inputs.same_secret_value_everywhere }}" == "true" ]]; then
             apply_secret uat "${{ inputs.secret_value_global }}"
             apply_secret prod "${{ inputs.secret_value_global }}"
           else
