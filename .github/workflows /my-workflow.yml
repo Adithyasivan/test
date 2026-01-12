@@ -1,0 +1,270 @@
+name: Create / Update AWS Secrets
+
+on:
+  workflow_dispatch:
+    inputs:
+      base_secret_name:
+        description: "Base secret name (example: apirate)"
+        required: true
+        type: string
+
+      add_env_prefix:
+        description: "Prefix secret name with environment (staging_, uat_, prod_)"
+        type: boolean
+        default: true
+
+      same_value:
+        description: "Use the same secret value everywhere"
+        required: true
+        type: boolean
+
+      secret_value_global:
+        description: "Global secret value (used if same_value = true)"
+        required: false
+        type: string
+
+      dry_run:
+        description: "Dry run (no secrets will be created)"
+        type: boolean
+        default: true
+
+      # Regions
+      enable_na:
+        description: "Enable NA region (us-east-1)"
+        type: boolean
+        default: false
+
+      enable_jp:
+        description: "Enable JP region (ap-northeast-1)"
+        type: boolean
+        default: false
+
+      enable_cn:
+        description: "Enable China region (cn-northwest-1)"
+        type: boolean
+        default: false
+
+      # NA env values
+      na_staging:
+        description: "NA staging secret value"
+        required: false
+        type: string
+      na_uat:
+        description: "NA uat secret value"
+        required: false
+        type: string
+      na_master:
+        description: "NA master secret value"
+        required: false
+        type: string
+
+      # JP env values
+      jp_uat:
+        description: "JP uat secret value"
+        required: false
+        type: string
+      jp_prod:
+        description: "JP prod secret value"
+        required: false
+        type: string
+
+      # CN env values
+      cn_uat:
+        description: "CN uat secret value"
+        required: false
+        type: string
+      cn_prod:
+        description: "CN prod secret value"
+        required: false
+        type: string
+
+jobs:
+  na_jp_secrets:
+    if: ${{ inputs.enable_na || inputs.enable_jp }}
+    runs-on: [hs-arm64-spot]
+
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Validate inputs
+        run: |
+          if [[ "${{ inputs.base_secret_name }}" =~ ^(staging_|uat_|prod_|master_) ]]; then
+            echo "❌ Do not include environment prefix in base_secret_name"
+            exit 1
+          fi
+
+          if [[ "${{ inputs.same_value }}" == "true" && -z "${{ inputs.secret_value_global }}" ]]; then
+            echo "❌ same_value is true but secret_value_global is empty"
+            exit 1
+          fi
+
+      - name: Assume AWS role (NA / JP)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::123456789012:role/github-secrets-writer
+          aws-region: us-east-1
+
+      - name: Handle NA secrets
+        if: ${{ inputs.enable_na }}
+        run: |
+          REGION="us-east-1"
+
+          build_name () {
+            ENV=$1
+            BASE="${{ inputs.base_secret_name }}"
+            if [[ "${{ inputs.add_env_prefix }}" == "true" ]]; then
+              echo "${ENV}_${BASE}"
+            else
+              echo "${BASE}"
+            fi
+          }
+
+          apply_secret () {
+            ENV=$1
+            VALUE=$2
+            NAME=$(build_name "$ENV")
+
+            if [[ -z "$VALUE" ]]; then
+              echo "Skipping NA $ENV (no value)"
+              return
+            fi
+
+            if [[ "${{ inputs.dry_run }}" == "true" ]]; then
+              echo "[DRY RUN] NA $REGION -> $NAME"
+              return
+            fi
+
+            aws secretsmanager create-secret \
+              --name "$NAME" \
+              --secret-string "$VALUE" \
+              --region "$REGION" \
+              --force-overwrite-replica-secret || \
+            aws secretsmanager put-secret-value \
+              --secret-id "$NAME" \
+              --secret-string "$VALUE" \
+              --region "$REGION"
+          }
+
+          if [[ "${{ inputs.same_value }}" == "true" ]]; then
+            apply_secret staging "${{ inputs.secret_value_global }}"
+            apply_secret uat "${{ inputs.secret_value_global }}"
+            apply_secret master "${{ inputs.secret_value_global }}"
+          else
+            apply_secret staging "${{ inputs.na_staging }}"
+            apply_secret uat "${{ inputs.na_uat }}"
+            apply_secret master "${{ inputs.na_master }}"
+          fi
+
+      - name: Handle JP secrets
+        if: ${{ inputs.enable_jp }}
+        run: |
+          REGION="ap-northeast-1"
+
+          build_name () {
+            ENV=$1
+            BASE="${{ inputs.base_secret_name }}"
+            if [[ "${{ inputs.add_env_prefix }}" == "true" ]]; then
+              echo "${ENV}_${BASE}"
+            else
+              echo "${BASE}"
+            fi
+          }
+
+          apply_secret () {
+            ENV=$1
+            VALUE=$2
+            NAME=$(build_name "$ENV")
+
+            if [[ -z "$VALUE" ]]; then
+              echo "Skipping JP $ENV (no value)"
+              return
+            fi
+
+            if [[ "${{ inputs.dry_run }}" == "true" ]]; then
+              echo "[DRY RUN] JP $REGION -> $NAME"
+              return
+            fi
+
+            aws secretsmanager create-secret \
+              --name "$NAME" \
+              --secret-string "$VALUE" \
+              --region "$REGION" \
+              --force-overwrite-replica-secret || \
+            aws secretsmanager put-secret-value \
+              --secret-id "$NAME" \
+              --secret-string "$VALUE" \
+              --region "$REGION"
+          }
+
+          if [[ "${{ inputs.same_value }}" == "true" ]]; then
+            apply_secret uat "${{ inputs.secret_value_global }}"
+            apply_secret prod "${{ inputs.secret_value_global }}"
+          else
+            apply_secret uat "${{ inputs.jp_uat }}"
+            apply_secret prod "${{ inputs.jp_prod }}"
+          fi
+
+  china_secrets:
+    if: ${{ inputs.enable_cn }}
+    runs-on: devops-ubuntu-cn
+
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Assume AWS China role
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws-cn:iam::123456789012:role/github-secrets-writer
+          aws-region: cn-northwest-1
+
+      - name: Handle China secrets
+        run: |
+          REGION="cn-northwest-1"
+
+          build_name () {
+            ENV=$1
+            BASE="${{ inputs.base_secret_name }}"
+            if [[ "${{ inputs.add_env_prefix }}" == "true" ]]; then
+              echo "${ENV}_${BASE}"
+            else
+              echo "${BASE}"
+            fi
+          }
+
+          apply_secret () {
+            ENV=$1
+            VALUE=$2
+            NAME=$(build_name "$ENV")
+
+            if [[ -z "$VALUE" ]]; then
+              echo "Skipping CN $ENV (no value)"
+              return
+            fi
+
+            if [[ "${{ inputs.dry_run }}" == "true" ]]; then
+              echo "[DRY RUN] CN $REGION -> $NAME"
+              return
+            fi
+
+            aws secretsmanager create-secret \
+              --name "$NAME" \
+              --secret-string "$VALUE" \
+              --region "$REGION" \
+              --force-overwrite-replica-secret || \
+            aws secretsmanager put-secret-value \
+              --secret-id "$NAME" \
+              --secret-string "$VALUE" \
+              --region "$REGION"
+          }
+
+          if [[ "${{ inputs.same_value }}" == "true" ]]; then
+            apply_secret uat "${{ inputs.secret_value_global }}"
+            apply_secret prod "${{ inputs.secret_value_global }}"
+          else
+            apply_secret uat "${{ inputs.cn_uat }}"
+            apply_secret prod "${{ inputs.cn_prod }}"
+          fi
